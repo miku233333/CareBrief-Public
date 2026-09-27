@@ -1,0 +1,248 @@
+name: iOS CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: |
+          curl --fail --location --silent --show-error \
+            --output /tmp/xcodegen.zip \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.45.4/xcodegen.zip
+          echo '090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef  /tmp/xcodegen.zip' | shasum -a 256 --check
+          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+          echo '/tmp/xcodegen/xcodegen/bin' >> "$GITHUB_PATH"
+          export PATH="/tmp/xcodegen/xcodegen/bin:$PATH"
+          xcodegen --version
+
+      - name: Run package tests
+        run: swift test
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate --spec project.yml
+          git diff --exit-code -- CareBriefApp.xcodeproj
+
+      - name: Select an available iPhone Simulator
+        id: simulator
+        run: |
+          udid="$(xcrun simctl list devices available --json | python3 -c 'import json, sys; devices = json.load(sys.stdin)["devices"]; runtime = devices.get("com.apple.CoreSimulator.SimRuntime.iOS-18-5", []); candidates = [device for device in runtime if device["name"].startswith("iPhone") and device.get("isAvailable", False)]; print(candidates[0]["udid"]) if candidates else sys.exit("No available iPhone found in the required iOS 18.5 runtime")')"
+          test -n "$udid"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
+      - name: Build App tests
+        run: |
+          xcodebuild \
+            build-for-testing \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefDebug" \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
+
+      - name: Run App unit tests
+        run: |
+          xcodebuild \
+            test-without-building \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefDebug" \
+            -parallel-testing-enabled NO \
+            -only-testing:CareBriefAppTests
+
+      - name: Run simple accessibility flows
+        run: |
+          xcodebuild \
+            test-without-building \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefDebug" \
+            -parallel-testing-enabled NO \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testEnglishMainScreenPassesAccessibilityAudit \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testEnglishLowerMainScreenPassesAccessibilityAudit \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testTraditionalChineseMainScreenPassesAccessibilityAudit \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testEnglishOnboardingPassesAccessibilityAudit \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testTraditionalChineseOnboardingPassesAccessibilityAudit \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testEnglishSourceEditorPreservesManualTextAcrossFocusChange
+
+      - name: Run English review accessibility flow
+        run: |
+          xcodebuild \
+            test-without-building \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefDebug" \
+            -parallel-testing-enabled NO \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testEnglishReviewFlowPassesAccessibilityAudit
+
+      - name: Run English export accessibility flow
+        id: english_export
+        run: |
+          xcodebuild \
+            test-without-building \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefDebug" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/CareBriefEnglishExport.xcresult" \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testEnglishSyntheticExportFlowPassesAccessibilityAudit
+
+      - name: Collect English export failure diagnostics
+        if: ${{ failure() && steps.english_export.outcome == 'failure' }}
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set +e
+          diagnostics="$RUNNER_TEMP/CareBriefEnglishExportDiagnostics"
+          mkdir -p "$diagnostics/crashes"
+
+          if test -d "$RUNNER_TEMP/CareBriefEnglishExport.xcresult"
+          then
+            cp -R "$RUNNER_TEMP/CareBriefEnglishExport.xcresult" "$diagnostics/"
+          fi
+
+          xcrun simctl list devices --json > "$diagnostics/simulator-devices.json" 2>&1
+          xcrun simctl spawn "$SIMULATOR_UDID" log show \
+            --last 10m \
+            --style compact \
+            --predicate 'process == "CareBrief" OR ((process == "SpringBoard" OR process == "runningboardd") AND (eventMessage CONTAINS[c] "CareBrief" OR eventMessage CONTAINS[c] "com.seeclearlabs.CareBrief"))' \
+            > "$diagnostics/simulator-targeted.log" 2>&1
+
+          for crash_root in \
+            "$HOME/Library/Logs/DiagnosticReports" \
+            "$HOME/Library/Developer/CoreSimulator/Devices/$SIMULATOR_UDID/data/Library/Logs/CrashReporter"
+          do
+            if test -d "$crash_root"
+            then
+              find "$crash_root" -type f \
+                \( -name 'CareBrief*.ips' -o -name 'CareBrief*.crash' \) \
+                -mmin -30 \
+                -exec cp -p {} "$diagnostics/crashes/" \;
+            fi
+          done
+          exit 0
+
+      - name: Upload English export failure diagnostics
+        if: ${{ failure() && steps.english_export.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gh8-xcode164-export-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/CareBriefEnglishExportDiagnostics
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Run Traditional Chinese review accessibility flow
+        run: |
+          xcodebuild \
+            test-without-building \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefDebug" \
+            -parallel-testing-enabled NO \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testTraditionalChineseReviewFlowPassesAccessibilityAudit
+
+      - name: Run Traditional Chinese export accessibility flow
+        run: |
+          xcodebuild \
+            test-without-building \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefDebug" \
+            -parallel-testing-enabled NO \
+            -only-testing:CareBriefAppUITests/CareBriefAccessibilityUITests/testTraditionalChineseSyntheticExportFlowPassesAccessibilityAudit
+
+      - name: Build iOS app
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefDebug" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES \
+            build
+
+      - name: Build iOS Release
+        run: |
+          xcodebuild \
+            -project CareBriefApp.xcodeproj \
+            -scheme CareBriefApp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/CareBriefRelease" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES \
+            build
+
+      - name: Verify privacy usage descriptions
+        run: |
+          source_plist='Apps/CareBriefApp/Info.plist'
+          plist="$RUNNER_TEMP/CareBriefDebug/Build/Products/Debug-iphonesimulator/CareBrief.app/Info.plist"
+          plutil -lint "$source_plist"
+          test -f "$plist"
+          for plist_key in \
+            NSCameraUsageDescription \
+            NSCalendarsUsageDescription \
+            NSRemindersUsageDescription \
+            NSCalendarsFullAccessUsageDescription \
+            NSRemindersFullAccessUsageDescription
+          do
+            /usr/libexec/PlistBuddy -c "Print :$plist_key" "$source_plist" >/dev/null
+            /usr/libexec/PlistBuddy -c "Print :$plist_key" "$plist" >/dev/null
+          done
+          for locale in en zh-Hant
+          do
+            source_strings="Apps/CareBriefApp/$locale.lproj/InfoPlist.strings"
+            built_strings="$RUNNER_TEMP/CareBriefDebug/Build/Products/Debug-iphonesimulator/CareBrief.app/$locale.lproj/InfoPlist.strings"
+            plutil -lint "$source_strings"
+            test -f "$built_strings"
+            plutil -lint "$built_strings"
+            for plist_key in \
+              NSCameraUsageDescription \
+              NSCalendarsUsageDescription \
+              NSRemindersUsageDescription \
+              NSCalendarsFullAccessUsageDescription \
+              NSRemindersFullAccessUsageDescription
+            do
+              value="$(plutil -extract "$plist_key" raw -o - "$built_strings")"
+              test -n "$value"
+            done
+          done

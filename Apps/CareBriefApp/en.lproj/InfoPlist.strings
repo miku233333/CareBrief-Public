@@ -1,0 +1,5 @@
+"NSCameraUsageDescription" = "The camera is used only when you scan for on-device text recognition.";
+"NSCalendarsFullAccessUsageDescription" = "Full Calendar access is requested only when you add checked actions, to prevent duplicates and support this-session Undo.";
+"NSCalendarsUsageDescription" = "Calendar access is requested only when you add checked actions.";
+"NSRemindersFullAccessUsageDescription" = "Full Reminders access is requested only when you add checked actions, to prevent duplicates and support this-session Undo.";
+"NSRemindersUsageDescription" = "Reminders access is requested only when you add checked actions.";

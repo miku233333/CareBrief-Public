@@ -1,0 +1,97 @@
+name: CareBriefApp
+
+options:
+  minimumXcodeGenVersion: 2.45.4
+  xcodeVersion: "27.0"
+  projectFormat: xcode16_3
+  developmentLanguage: en
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"
+
+packages:
+  CareBriefPackage:
+    path: .
+
+targets:
+  CareBriefApp:
+    type: application
+    platform: iOS
+    productName: CareBrief
+    deploymentTarget: "16.0"
+    sources:
+      - path: Apps/CareBriefApp
+        excludes:
+          - Info.plist
+    dependencies:
+      - package: CareBriefPackage
+        product: CareBriefCore
+      - package: CareBriefPackage
+        product: CareBriefAppSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.seeclearlabs.CareBrief
+        PRODUCT_NAME: CareBrief
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        GENERATE_INFOPLIST_FILE: false
+        INFOPLIST_FILE: Apps/CareBriefApp/Info.plist
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+
+  CareBriefAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Apps/CareBriefAppTests
+    dependencies:
+      - target: CareBriefApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.seeclearlabs.CareBriefTests
+        PRODUCT_NAME: CareBriefAppTests
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_STYLE: Automatic
+
+  CareBriefAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Apps/CareBriefAppUITests
+    dependencies:
+      - target: CareBriefApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.seeclearlabs.CareBriefUITests
+        PRODUCT_NAME: CareBriefAppUITests
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_STYLE: Automatic
+
+schemes:
+  CareBriefApp:
+    build:
+      targets:
+        CareBriefApp: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    test:
+      targets:
+        - CareBriefAppTests
+        - CareBriefAppUITests
+    management:
+      shared: true
+      orderHint: 0

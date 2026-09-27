@@ -1,0 +1,5 @@
+"NSCameraUsageDescription" = "只在你選擇掃描時使用相機，並在裝置上辨識文字。";
+"NSCalendarsFullAccessUsageDescription" = "只在你加入已核對行動時要求 Calendar 完整權限，用於防止重複及本次 Undo。";
+"NSCalendarsUsageDescription" = "只在你加入已核對行動時要求 Calendar 權限。";
+"NSRemindersFullAccessUsageDescription" = "只在你加入已核對行動時要求 Reminders 完整權限，用於防止重複及本次 Undo。";
+"NSRemindersUsageDescription" = "只在你加入已核對行動時要求 Reminders 權限。";
